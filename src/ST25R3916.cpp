@@ -235,6 +235,7 @@ bool ST25R3916::isConnected() const {
 }
 
 bool ST25R3916::healthCheck() {
+    if (!m_connected) return false;
     uint8_t identity = 0;
     if (!readReg(REG_IC_IDENTITY, identity) || ((identity >> 3) & 0x1F) != IC_TYPE_ST25R391X) {
         m_connected = false;
@@ -250,7 +251,9 @@ bool ST25R3916::healthCheck() {
 bool ST25R3916::writeReg(uint8_t reg, uint8_t val) {
     if (!m_dev) return false;
     const uint8_t buf[2] = {static_cast<uint8_t>(OP_WRITE_REGISTER | (reg & 0x3F)), val};
-    return i2c_master_transmit(m_dev, buf, sizeof(buf), I2C_TIMEOUT_MS) == ESP_OK;
+    const bool ok=i2c_master_transmit(m_dev,buf,sizeof(buf),I2C_TIMEOUT_MS)==ESP_OK;
+    if(!ok)m_connected=false;
+    return ok;
 }
 
 bool ST25R3916::readReg(uint8_t reg, uint8_t& out) {
@@ -258,7 +261,9 @@ bool ST25R3916::readReg(uint8_t reg, uint8_t& out) {
     const uint8_t mode = OP_READ_REGISTER | (reg & 0x3F);
     // transmit_receive issues a repeated start; releasing the bus in between
     // would drop the pending register selection.
-    return i2c_master_transmit_receive(m_dev, &mode, 1, &out, 1, I2C_TIMEOUT_MS) == ESP_OK;
+    const bool ok=i2c_master_transmit_receive(m_dev,&mode,1,&out,1,I2C_TIMEOUT_MS)==ESP_OK;
+    if(!ok)m_connected=false;
+    return ok;
 }
 
 uint8_t ST25R3916::readRegOr(uint8_t reg, uint8_t fallback) {
@@ -276,7 +281,9 @@ bool ST25R3916::modifyReg(uint8_t reg, uint8_t clearMask, uint8_t setMask) {
 bool ST25R3916::command(uint8_t cmd) {
     if (!m_dev) return false;
     // Command constants already carry the 0b11 mode bits.
-    return i2c_master_transmit(m_dev, &cmd, 1, I2C_TIMEOUT_MS) == ESP_OK;
+    const bool ok=i2c_master_transmit(m_dev,&cmd,1,I2C_TIMEOUT_MS)==ESP_OK;
+    if(!ok)m_connected=false;
+    return ok;
 }
 
 bool ST25R3916::writeFifo(const uint8_t* data, size_t len) {
@@ -289,14 +296,16 @@ bool ST25R3916::writeFifo(const uint8_t* data, size_t len) {
     uint8_t buf[kMaxFrame];
     buf[0] = OP_LOAD_FIFO;
     memcpy(buf + 1, data, len);
-    return i2c_master_transmit(m_dev, buf, len + 1, I2C_TIMEOUT_MS) == ESP_OK;
+    const bool ok=i2c_master_transmit(m_dev,buf,len+1,I2C_TIMEOUT_MS)==ESP_OK;
+    if(!ok)m_connected=false;
+    return ok;
 }
 
 size_t ST25R3916::readFifo(uint8_t* out, size_t maxLen) {
     if (!m_dev || maxLen == 0) return 0;
     const uint8_t mode = OP_READ_FIFO;
     if (i2c_master_transmit_receive(m_dev, &mode, 1, out, maxLen, I2C_TIMEOUT_MS) != ESP_OK) {
-        return 0;
+        m_connected=false;return 0;
     }
     return maxLen;
 }
