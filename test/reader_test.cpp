@@ -69,6 +69,33 @@ int main() {
     reader.stop();reader.stop();assert(wire.liveDevices==0 && wire.busInitialized);
     assert(reader.init());reader.stop();assert(wire.deviceAdds==2 && wire.deviceRemoves==2);
     chipIdentity=0;assert(!reader.init() && wire.liveDevices==0);chipIdentity=0x28;
+    // Both IC families must retain UID/ECP/ISO-DEP support and health checks.
+    for (uint8_t identity : {0x28, 0x31}) {
+        chipIdentity=identity;commands.clear();supplyAdc=identity==0x31?128:214;
+        assert(reader.init() && reader.healthCheck());
+        assert(reader.getFwMajor()==(identity>>3));
+        assert(bool(registers[1]&0x80)==(identity==0x31));
+        assert((std::find(commands.begin(),commands.end(),0xEA)!=commands.end())==(identity==0x31));
+        assert(reader.beginDiscovery());
+        replies={{{4,0}},{{1,2,3,4,4}},{{0x20}},{{3,0x28,0x40}}};
+        assert(reader.pollForTag(uid,atqa,sak,30) && reader.m_isodepActive);
+        assert(reader.setEcpFrame(ecp.data(),ecp.size()));
+        const auto sent=sentFrames.size();replies.clear();
+        assert(!reader.pollForTag(uid,atqa,sak,30));
+        assert(sentFrames[sent]==std::vector<uint8_t>(ecp.begin(),ecp.end()));
+        isoDep(reader);replies={{{0x02,0x90,0}}};
+        assert(reader.exchangeApdu({0xA4},response,1000));
+        registers[0x3F]=identity==0x31?0x28:0x31;
+        assert(!reader.healthCheck());reader.stop();
+    }
+    for(uint8_t invalid : {0x00,0x30,0x38,0xFF}) {
+        chipIdentity=invalid;assert(!reader.init() && wire.liveDevices==0);
+    }
+    chipIdentity=0x31;calibrationFails=true;
+    assert(!reader.init() && wire.liveDevices==0);calibrationFails=false;
+    measurementFails=true;assert(!reader.init() && wire.liveDevices==0);measurementFails=false;
+    supplyAdc=0;assert(!reader.init() && wire.liveDevices==0);supplyAdc=128;
+    assert(reader.init() && reader.healthCheck());reader.stop();
     wire.deviceAddStatus=ESP_ERR_NO_MEM;assert(!reader.init() && wire.liveDevices==0);
-    std::cout << "ST25R3916 I2C UID, ECP, ISO-DEP chaining/CRC/WTX/bounds and shared-bus lifecycle passed\n";
+    std::cout << "ST25R3916/3916B I2C identity, calibration, supply, UID, ECP, ISO-DEP chaining/CRC/WTX/bounds and shared-bus lifecycle passed\n";
 }

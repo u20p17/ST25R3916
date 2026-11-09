@@ -22,6 +22,9 @@ inline std::vector<std::vector<uint8_t>> sentFrames;
 inline bool busFails = false;
 inline unsigned busTime = 100;
 inline uint8_t chipIdentity = 0x28;
+inline uint8_t supplyAdc = 214;
+inline bool calibrationFails = false, measurementFails = false;
+inline std::vector<uint8_t> commands;
 inline esp_err_t i2c_master_bus_add_device(TwoWire* bus, const i2c_device_config_t* cfg, Device** out) {
     assert(bus->busInitialized && cfg->device_address == 0x50 && cfg->scl_speed_hz == 400000);
     if (bus->deviceAddStatus != ESP_OK) return bus->deviceAddStatus;
@@ -42,6 +45,10 @@ inline esp_err_t i2c_master_transmit(Device* dev, const uint8_t* data, size_t le
         registers[data[0]]=data[1]; return ESP_OK;
     }
     assert(len == 1);
+    commands.push_back(data[0]);
+    if (data[0] == 0xEA && !calibrationFails) registers[0x1B] |= 0x80;
+    if (data[0] == 0xDF && !measurementFails) { registers[0x25]=supplyAdc;registers[0x1B]|=0x80; }
+    if (data[0] == 0xD6) registers[0x1B] |= 0x80;
     if (data[0] == 0xC1) { registers.fill(0); registers[0x3F]=chipIdentity; }
     if (data[0] == 0xDB) { tx.clear(); rx.clear(); }
     if (data[0] == 0xC4 || data[0] == 0xC5 || data[0] == 0xC7) {
@@ -65,8 +72,13 @@ inline esp_err_t i2c_master_transmit_receive(Device* dev, const uint8_t* command
         if (len > rx.size()) return ESP_FAIL;
         std::copy_n(rx.begin(),len,out);rx.erase(rx.begin(),rx.begin()+len);return ESP_OK;
     }
-    assert(len == 1 && (*command&0x40));
+    assert(*command&0x40);
     auto reg=*command&0x3F;
+    if (reg == 0x1A) {
+        assert(len == 4);std::copy_n(registers.begin()+reg,len,out);
+        std::fill_n(registers.begin()+reg,len,0);return ESP_OK;
+    }
+    assert(len == 1);
     *out = reg == 0x1E ? rx.size() & 255 : reg == 0x1F ? ((rx.size()>>8)<<6) : registers[reg];
     if (reg >= 0x1A && reg <= 0x1D) registers[reg]=0;
     return ESP_OK;

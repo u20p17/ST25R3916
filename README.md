@@ -1,6 +1,6 @@
 # ST25R3916
 
-ESP32 Arduino hardware-I2C driver for the Elechouse ST25R3916 in I2C mode.
+ESP32 Arduino hardware-I2C driver for the Elechouse ST25R3916 and ST25R3916B (including Mini) in I2C mode.
 Default address **0x50**, bus **400 kHz**, no external IRQ wire required.
 Requires Arduino ESP32 with ESP-IDF 5.4+ and its native I2C bus-handle API.
 
@@ -12,8 +12,20 @@ Requires Arduino ESP32 with ESP-IDF 5.4+ and its native I2C bus-handle API.
 - Borrows the shared TwoWire bus, removes only its own device handle on stop.
 - No dependency on OpenKNX, ETS, HomeSpan, HomeKey or a credential store.
 
-This implementation targets ST25R3916, not an unverified ST25R3916B variant.
-SPI and NFC-B/F/V are not implemented. Physical Elechouse/iPhone validation is pending.
+ST25R3916 (type 0x05) and production ST25R3916B (type 0x06, revision 1+)
+are recognized at runtime. B silicon performs the mandatory RC calibration after
+reset. Both variants measure their IC supply before configuring the regulator
+mode; a module's input voltage can differ from its regulated IC supply.
+Identity checks also run during health monitoring; other chip types are rejected.
+SPI and NFC-B/F/V are not implemented.
+Physical validation: Elechouse ST25R3916B Mini on XIAO ESP32-S3 over I2C;
+ordinary UID card detection and iPhone HomeKey authentication confirmed.
+Performance comparisons and longer stability testing remain pending.
+
+Initialization follows [ST DS13541](https://www.st.com/resource/en/datasheet/st25r3916b.pdf)
+and [AN5768](https://www.st.com/resource/en/application_note/an5768-migrating-from-st25r39xx-to-st25r39xxb-stmicroelectronics.pdf).
+The shared NFC-A/ISO-DEP path retains the chip's default TX-driver and AWS settings;
+original-chip modulation values are not copied to the B variant.
 
 ## Usage
 
@@ -27,7 +39,8 @@ ST25R3916 reader(Wire, 21, 22);
 // releaseTag() after use; stop() removes only this reader's I2C device handle.
 ```
 
-Use the module's documented 5 V supply and ESP32-compatible logic levels.
+Use the module's documented input supply and ESP32-compatible logic levels.
+The Elechouse Mini V2 specifies 3.3–5 V input; other modules may require 5 V.
 All devices on the shared bus must use compatible pins and unique addresses.
 Call this instance from one task, or synchronize access externally.
 

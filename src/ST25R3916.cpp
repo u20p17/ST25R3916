@@ -27,6 +27,9 @@ constexpr uint8_t OP_LOAD_FIFO = 0x80;       // 10000000
 constexpr uint8_t OP_READ_FIFO = 0x9F;       // 10011111
 
 // ---- registers (space A) --------------------------------------------------
+constexpr uint8_t REG_IO_CONF2 = 0x01;
+constexpr uint8_t REG_AD_RESULT = 0x25;
+constexpr uint8_t REG_REGULATOR_CONTROL = 0x2C;
 constexpr uint8_t REG_OP_CONTROL = 0x02;
 constexpr uint8_t REG_MODE = 0x03;
 constexpr uint8_t REG_BITRATE = 0x04;
@@ -52,6 +55,8 @@ constexpr uint8_t CMD_TRANSMIT_WITHOUT_CRC = 0xC5;
 constexpr uint8_t CMD_TRANSMIT_WUPA = 0xC7;
 constexpr uint8_t CMD_ADJUST_REGULATORS = 0xD6;
 constexpr uint8_t CMD_CLEAR_FIFO = 0xDB;
+constexpr uint8_t CMD_MEASURE_VDD = 0xDF;
+constexpr uint8_t CMD_RC_CAL = 0xEA;
 
 // ---- bits -----------------------------------------------------------------
 constexpr uint8_t OP_EN = 0x80;     // oscillator + regulator
@@ -62,6 +67,7 @@ constexpr uint8_t AUX_NO_CRC_RX = 0x80;
 
 // Interrupt status lives in four read-to-clear registers, packed into one word:
 //   0x1A main << 24 | 0x1B timer/nfc << 16 | 0x1C error/wakeup << 8 | 0x1D pt
+constexpr uint32_t IRQ_DCT = 0x80ul << 16;
 constexpr uint32_t IRQ_OSC = 0x80ul << 24;
 constexpr uint32_t IRQ_RXE = 0x10ul << 24;
 constexpr uint32_t IRQ_TXE = 0x08ul << 24;
@@ -72,7 +78,15 @@ constexpr uint32_t IRQ_ERR2 = 0x20ul << 8;
 constexpr uint32_t IRQ_ERR1 = 0x10ul << 8;
 constexpr uint32_t IRQ_ANY_ERROR = IRQ_CRC | IRQ_PAR | IRQ_ERR2 | IRQ_ERR1;
 
-constexpr uint8_t IC_TYPE_ST25R391X = 0x05;
+constexpr uint8_t IC_TYPE_ST25R3916 = 0x05;
+constexpr uint8_t IC_TYPE_ST25R3916B = 0x06;
+
+bool supportedIdentity(uint8_t identity) {
+    const uint8_t type = (identity >> 3) & 0x1F;
+    // ST RFAL also excludes pre-production B silicon (revision zero).
+    return type == IC_TYPE_ST25R3916 ||
+        (type == IC_TYPE_ST25R3916B && (identity & 0x07) >= 1);
+}
 
 // ---- ISO14443 -------------------------------------------------------------
 constexpr uint8_t SEL_CL1 = 0x93;
@@ -170,13 +184,13 @@ bool ST25R3916::init() {
     }
     m_icType = (identity >> 3) & 0x1F;
     m_icRev = identity & 0x07;
-    if (m_icType != IC_TYPE_ST25R391X) {
-        ESP_LOGE(TAG, "IC_IDENTITY 0x%02X: ic_type 0x%02X is not ST25R391x", identity, m_icType);
+    if (!supportedIdentity(identity)) {
+        ESP_LOGE(TAG, "IC_IDENTITY 0x%02X: unsupported ST25R3916/B type 0x%02X or revision", identity, m_icType);
         stop();
         return false;
     }
-    ESP_LOGI(TAG, "Found ST25R391x, IC_IDENTITY 0x%02X (type 0x%02X rev %u)",
-             identity, m_icType, m_icRev);
+    ESP_LOGI(TAG, "Found %s, IC_IDENTITY 0x%02X (type 0x%02X rev %u)",
+             m_icType == IC_TYPE_ST25R3916B ? "ST25R3916B" : "ST25R3916", identity, m_icType, m_icRev);
 
     if (!command(CMD_SET_DEFAULT)) { stop(); return false; }
     vTaskDelay(pdMS_TO_TICKS(1));
@@ -204,8 +218,34 @@ bool ST25R3916::init() {
     }
     ESP_LOGI(TAG, "Oscillator stable after %lld us", esp_timer_get_time() - t0);
 
-    if (!command(CMD_ADJUST_REGULATORS)) { stop(); return false; }
-    vTaskDelay(pdMS_TO_TICKS(1));
+    // ST DS13541 / RFAL initialization: B silicon requires RC calibration
+    // after every reset. Do not send this B-only command to the original IC.
+    if (m_icType == IC_TYPE_ST25R3916B) {
+        clearInterrupts();
+        if (!command(CMD_RC_CAL) || !(waitInterrupt(IRQ_DCT, 10) & IRQ_DCT)) {
+            ESP_LOGE(TAG, "ST25R3916B RC calibration failed");
+            stop(); return false;
+        }
+    }
+
+    // Module input voltage is not necessarily the IC's VDD (Mini boards have
+    // on-board regulation). Measure the chip supply instead of assuming 5 V.
+    clearInterrupts();
+    uint8_t supply = 0;
+    if (!modifyReg(REG_REGULATOR_CONTROL, 0x07, 0) || !command(CMD_MEASURE_VDD) ||
+        !(waitInterrupt(IRQ_DCT, 5) & IRQ_DCT) || !readReg(REG_AD_RESULT, supply)) {
+        ESP_LOGE(TAG, "Supply measurement failed"); stop(); return false;
+    }
+    const uint32_t supplyMv = uint32_t(supply) * 234 / 10;
+    if (supplyMv < 2400 || supplyMv > 5500 ||
+        !modifyReg(REG_IO_CONF2, 0x80, supplyMv < 3600 ? 0x80 : 0)) {
+        ESP_LOGE(TAG, "Unsupported chip supply: %u mV", unsigned(supplyMv)); stop(); return false;
+    }
+    clearInterrupts();
+    if (!command(CMD_ADJUST_REGULATORS) || !(waitInterrupt(IRQ_DCT, 10) & IRQ_DCT)) {
+        ESP_LOGE(TAG, "Regulator adjustment failed"); stop(); return false;
+    }
+    ESP_LOGI(TAG, "Chip supply: %u mV (%s mode)", unsigned(supplyMv), supplyMv < 3600 ? "3.3V" : "5V");
 
     if (!writeReg(REG_MODE, MODE_OM_ISO14443A) || !writeReg(REG_BITRATE, 0x00))
     { stop(); return false; }
@@ -237,7 +277,8 @@ bool ST25R3916::isConnected() const {
 bool ST25R3916::healthCheck() {
     if (!m_connected) return false;
     uint8_t identity = 0;
-    if (!readReg(REG_IC_IDENTITY, identity) || ((identity >> 3) & 0x1F) != IC_TYPE_ST25R391X) {
+    if (!readReg(REG_IC_IDENTITY, identity) || !supportedIdentity(identity) ||
+        ((identity >> 3) & 0x1F) != m_icType || (identity & 0x07) != m_icRev) {
         m_connected = false;
         m_icType = 0;
         m_icRev = 0;
@@ -320,12 +361,15 @@ uint16_t ST25R3916::fifoLen() {
 // -------------------------------------------------------------- interrupts
 
 uint32_t ST25R3916::readInterrupts() {
-    const uint8_t mainIrq = readRegOr(REG_MAIN_IRQ);
-    const uint8_t timerIrq = readRegOr(REG_TIMER_NFC_IRQ);
-    const uint8_t errorIrq = readRegOr(REG_ERROR_WAKEUP_IRQ);
-    const uint8_t ptIrq = readRegOr(REG_PASSIVE_TARGET_IRQ);
-    return (static_cast<uint32_t>(mainIrq) << 24) | (static_cast<uint32_t>(timerIrq) << 16) |
-           (static_cast<uint32_t>(errorIrq) << 8) | static_cast<uint32_t>(ptIrq);
+    // Read all four read-to-clear status registers in a single I2C burst,
+    // as required by the ST register interface. This also shortens RF polling.
+    uint8_t irq[4] = {};
+    const uint8_t mode = OP_READ_REGISTER | REG_MAIN_IRQ;
+    if (!m_dev || i2c_master_transmit_receive(m_dev, &mode, 1, irq, sizeof(irq), I2C_TIMEOUT_MS) != ESP_OK) {
+        m_connected = false; return 0;
+    }
+    return (static_cast<uint32_t>(irq[0]) << 24) | (static_cast<uint32_t>(irq[1]) << 16) |
+           (static_cast<uint32_t>(irq[2]) << 8) | static_cast<uint32_t>(irq[3]);
 }
 
 void ST25R3916::clearInterrupts() {
