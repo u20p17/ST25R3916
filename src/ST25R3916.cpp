@@ -17,6 +17,9 @@
 #include "freertos/task.h"
 
 #include <cstring>
+#ifdef ST25R3916_TIMING_TEST
+#include <cstdio>
+#endif
 
 namespace {
 
@@ -415,7 +418,7 @@ void ST25R3916::setNumTxBytes(uint16_t bytes, uint8_t trailingBits) {
 ST25R3916::RxResult ST25R3916::transceive(const uint8_t* tx, size_t txLen,
                                                       uint8_t* rx, size_t rxMax,
                                                       bool txCrc, bool rxCrc,
-                                                      uint32_t timeoutMs) {
+                                                      uint32_t timeoutMs, bool expectReply) {
     RxResult r;
 
     // Responses that genuinely carry no CRC -- notably the ISO14443-3
@@ -442,6 +445,10 @@ ST25R3916::RxResult ST25R3916::transceive(const uint8_t* tx, size_t txLen,
         r.error = "transmit did not complete";
         return r;
     }
+
+    // ECP is a broadcast, with no direct RF response. Only the TX-complete
+    // interrupt is required; ordinary card/APDU exchanges still wait for RX.
+    if (!expectReply) { r.ok = true; r.irqs = seen; return r; }
 
     // readInterrupts() clears the status registers as it reads them, so the poll
     // that observed IRQ_TXE may have latched IRQ_RXE in the same read. Entering
@@ -642,17 +649,34 @@ bool ST25R3916::pollForTag(std::vector<uint8_t>& uid,
     if (!m_fieldUp) setField(true);
 
     uint8_t rx[32];
-
-    // The optional caller-supplied frame already carries its CRC-A, so the
-    // chip's automatic CRC must stay off. No reply is expected.
-    if (m_ecpSize) // Optional: disabled by default for ordinary NFC operation.
-        transceive(m_ecpData.data(), m_ecpSize, rx, sizeof(rx), false, false, 12);
-
-    // Brief settle before the wake-up poll, mirroring the PN532 backend.
+    const bool fast = fastPolling();
+#ifdef ST25R3916_TIMING_TEST
+    if (fast != m_timingFast) {
+        m_timingFast=fast;m_timingLastReport=nowMs();m_timingPolls=0;m_timingPollUs=0;
+    }
+    const int64_t pollStart = esp_timer_get_time();
+#endif
+    // Fast is the default for both chip variants. Baseline remains selectable
+    // for comparisons. ISO-DEP/FWT/WTX timeouts are unchanged.
+    if (m_ecpSize)
+        transceive(m_ecpData.data(), m_ecpSize, rx, sizeof(rx), false, false, 12, !fast);
+#ifdef ST25R3916_TIMING_TEST
+    const int64_t ecpEnd = esp_timer_get_time();
+#endif
     vTaskDelay(pdMS_TO_TICKS(5));
-
-    RxResult p = shortFrame(CMD_TRANSMIT_WUPA, rx, sizeof(rx),
-                            timeoutMs ? timeoutMs : 20);
+    const uint32_t requested = timeoutMs ? timeoutMs : 20;
+    const uint32_t discoveryTimeout = fast ? std::min(requested, uint32_t(10)) : requested;
+    RxResult p = shortFrame(CMD_TRANSMIT_WUPA, rx, sizeof(rx), discoveryTimeout);
+#ifdef ST25R3916_TIMING_TEST
+    const int64_t wakeEnd = esp_timer_get_time();
+    ++m_timingPolls; m_timingPollUs += wakeEnd-pollStart;
+    if (nowMs()-m_timingLastReport >= 5000) {
+        printf("ST25 timing: mode=%s polls=%u average_probe_us=%llu limit_ms=%u\n",
+            fast ? "fast" : "baseline", unsigned(m_timingPolls),
+            static_cast<unsigned long long>(m_timingPollUs/m_timingPolls), unsigned(discoveryTimeout));
+        m_timingLastReport=nowMs();m_timingPolls=0;m_timingPollUs=0;
+    }
+#endif
     if (!p.ok || p.len < 2) return false;
     atqa[0] = rx[0];
     atqa[1] = rx[1];
@@ -667,6 +691,12 @@ bool ST25R3916::pollForTag(std::vector<uint8_t>& uid,
             return false;
         }
     }
+#ifdef ST25R3916_TIMING_TEST
+    printf("ST25 timing: detected mode=%s ecp_us=%lld wake_us=%lld activation_us=%lld total_poll_us=%lld\n",
+        fast ? "fast" : "baseline", static_cast<long long>(ecpEnd-pollStart),
+        static_cast<long long>(wakeEnd-ecpEnd), static_cast<long long>(esp_timer_get_time()-wakeEnd),
+        static_cast<long long>(esp_timer_get_time()-pollStart));
+#endif
     return true;
 }
 

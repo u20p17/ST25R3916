@@ -20,6 +20,7 @@ inline std::deque<Reply> replies;
 inline std::vector<uint8_t> tx, rx;
 inline std::vector<std::vector<uint8_t>> sentFrames;
 inline bool busFails = false;
+inline bool noResponseIrq = true;
 inline unsigned busTime = 100;
 inline uint8_t chipIdentity = 0x28;
 inline uint8_t supplyAdc = 214;
@@ -55,7 +56,7 @@ inline esp_err_t i2c_master_transmit(Device* dev, const uint8_t* data, size_t le
         sentFrames.push_back(data[0] == 0xC7 ? std::vector<uint8_t>{0x52} : tx);
         registers[0x1A]=8;
         if ((data[0] == 0xC5 && !tx.empty() && tx[0] == 0x6A) || replies.empty()) {
-            registers[0x1B]=0x40; return ESP_OK;
+            registers[0x1B]=noResponseIrq ? 0x40 : 0; return ESP_OK;
         }
         auto reply=replies.front();replies.pop_front();rx=reply.bytes;
         if (!(registers[0x0A]&0x80)) {rx.push_back(0);rx.push_back(0);}

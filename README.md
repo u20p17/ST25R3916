@@ -58,3 +58,14 @@ Adapted from rednblkx/HomeKey-ESP32 at
 The MIT license and upstream copyright are retained in LICENSE.
 Local adaptations include shared-bus ownership, optional copied ECP frames,
 ATS validation and stricter exchange bounds, deadlines and failure handling.
+
+## Polling modes
+
+Fast polling is the default in every build, for both ST25R3916 and ST25R3916B.
+It sends ECP as a broadcast (wait for TX completion, no RX wait) and caps the
+WUPA response window at 10 ms. Baseline retains the original receive wait and
+caller-supplied discovery timeout. Use `ST25R3916::setFastPolling(false)` to
+select baseline, or `true` for fast. Selection is volatile and shared by reader
+instances; reboot returns to fast. Switch only between card presentations.
+APDU, FWT/WTX, RATS, settling and field-on guard times are unchanged.
+`ST25R3916_TIMING_TEST` enables diagnostic measurements only.

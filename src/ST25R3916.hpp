@@ -10,6 +10,7 @@
 #include <driver/i2c_master.h>
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <vector>
 
@@ -25,6 +26,9 @@ public:
     ST25R3916(ST25R3916&&) = delete;
     ST25R3916& operator=(ST25R3916&&) = delete;
 
+    // Switch between presentations. The selection is volatile; reboot uses fast.
+    static void setFastPolling(bool enabled) { s_fastPolling.store(enabled); }
+    static bool fastPolling() { return s_fastPolling.load(); }
     bool init();
     void stop();
     bool isConnected() const;
@@ -52,6 +56,12 @@ public:
     bool setEcpFrame(const uint8_t* frame, size_t length);
 
 private:
+    inline static std::atomic<bool> s_fastPolling{true};
+#ifdef ST25R3916_TIMING_TEST
+    bool m_timingFast = false;
+    uint32_t m_timingLastReport = 0, m_timingPolls = 0;
+    uint64_t m_timingPollUs = 0;
+#endif
     uint32_t m_exchangeStart = 0, m_exchangeBudget = 0;
     bool m_exchanging = false;
 
@@ -82,7 +92,7 @@ private:
     };
 
     RxResult transceive(const uint8_t* tx, size_t txLen, uint8_t* rx, size_t rxMax,
-                        bool txCrc, bool rxCrc, uint32_t timeoutMs = 20);
+                        bool txCrc, bool rxCrc, uint32_t timeoutMs = 20, bool expectReply = true);
     RxResult shortFrame(uint8_t cmd, uint8_t* rx, size_t rxMax, uint32_t timeoutMs = 20);
 
     // ---- ISO14443-3 / -4 --------------------------------------------------

@@ -10,7 +10,9 @@
 static void isoDep(ST25R3916& reader) {
     reader.m_isodepActive=true;reader.m_blockNum=0;reader.m_fsc=32;reader.m_fwtMs=5;
 }
-int main() {
+int main(int argc, char** argv) {
+    assert(ST25R3916::fastPolling()); // Production and diagnostic builds default fast.
+    if(argc > 1) ST25R3916::setFastPolling(std::string(argv[1]) != "baseline");
     TwoWire wire;std::array<uint8_t,18> ecp{};
     ST25R3916 reader(wire,21,22);
     assert(reader.init() && reader.init());
@@ -96,6 +98,26 @@ int main() {
     measurementFails=true;assert(!reader.init() && wire.liveDevices==0);measurementFails=false;
     supplyAdc=0;assert(!reader.init() && wire.liveDevices==0);supplyAdc=128;
     assert(reader.init() && reader.healthCheck());reader.stop();
+#ifdef ST25R3916_TIMING_TEST
+    assert(reader.init());assert(reader.beginDiscovery());
+    noResponseIrq=false;replies.clear();
+    int64_t ecpUs[2],probeUs[2];
+    for(int fast=0;fast<2;fast++) {
+        ST25R3916::setFastPolling(fast);
+        const auto start=fakeMicros;
+        auto result=reader.transceive(ecp.data(),ecp.size(),nullptr,0,false,false,12,!fast);
+        ecpUs[fast]=fakeMicros-start;
+        assert(result.ok==bool(fast));assert(!result.len);
+        const auto probeStart=fakeMicros;
+        assert(!reader.pollForTag(uid,atqa,sak,250));
+        probeUs[fast]=fakeMicros-probeStart;
+    }
+    assert(ecpUs[0]>=12000 && ecpUs[1]<2000);
+    assert(probeUs[0]>=250000 && probeUs[1]<30000);
+    noResponseIrq=true;ST25R3916::setFastPolling(false);reader.stop();
+    std::cout << "A/B timing model: ECP " << ecpUs[0] << " -> " << ecpUs[1]
+        << " us; idle probe " << probeUs[0] << " -> " << probeUs[1] << " us (simulated bus)\n";
+#endif
     wire.deviceAddStatus=ESP_ERR_NO_MEM;assert(!reader.init() && wire.liveDevices==0);
     std::cout << "ST25R3916/3916B I2C identity, calibration, supply, UID, ECP, ISO-DEP chaining/CRC/WTX/bounds and shared-bus lifecycle passed\n";
 }
