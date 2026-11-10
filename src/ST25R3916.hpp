@@ -2,10 +2,10 @@
 // Copyright (c) 2026 rednblkx. MIT; see ../LICENSE.
 #pragma once
 
-// ESP32 Arduino shared-I2C ST25R3916 NFC-A / ISO-DEP driver.
-// Owns its I2C device handle, never the TwoWire bus. Call from one task;
-// synchronize externally if more than one task uses this instance.
-#include <Wire.h>
+// Native ESP-IDF ST25R3916 NFC-A / ISO-DEP driver.
+// Borrows an initialized master bus; its owner must outlive this instance.
+// Owns only its device handle. Serialize init/stop and bus lifecycle changes
+// externally; call the reader from one task or synchronize access externally.
 
 #include <driver/i2c_master.h>
 
@@ -16,8 +16,8 @@
 
 class ST25R3916 {
 public:
-    // Borrow a shared bus. SDA/SCL must match other users of that bus.
-    ST25R3916(TwoWire& wire, int sda, int scl,
+    // ESP-IDF 5.4+. Never creates, deletes or reconfigures the supplied bus.
+    ST25R3916(i2c_master_bus_handle_t bus,
               uint8_t i2cAddr = 0x50, uint32_t i2cHz = 400000);
     ~ST25R3916();
 
@@ -102,8 +102,6 @@ private:
 
     std::array<uint8_t, 18> m_ecpData{};
     size_t m_ecpSize = 0;
-    TwoWire& m_wire;
-    int m_sda, m_scl;
     uint8_t m_i2cAddr;
     uint32_t m_i2cHz;
 

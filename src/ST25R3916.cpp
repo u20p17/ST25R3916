@@ -1,17 +1,10 @@
 // ST25R3916 I2C reader adapted from rednblkx/HomeKey-ESP32.
 // Copyright (c) 2026 rednblkx. MIT; see ../LICENSE.
 // Reference commit f167cba1950aa9e37afb9cb06163a78299599a67.
-#if defined(ARDUINO_ARCH_ESP32)
 #include "ST25R3916.hpp"
-#include <esp32-hal-i2c.h>
-#include <esp_idf_version.h>
 #include <algorithm>
-#if ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(5, 4, 0)
-#error "ST25R3916 requires the Arduino native I2C bus-handle API (IDF 5.4+)"
-#endif
 
 #include "esp_log.h"
-#include "esp_rom_sys.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -141,10 +134,10 @@ constexpr size_t kMaxFrame = 264;
 
 // ---------------------------------------------------------------- lifecycle
 
-ST25R3916::ST25R3916(TwoWire& wire, int sda, int scl,
+ST25R3916::ST25R3916(i2c_master_bus_handle_t bus,
                                  uint8_t i2cAddr,
                                  uint32_t i2cHz)
-    : m_wire(wire), m_sda(sda), m_scl(scl), m_i2cAddr(i2cAddr), m_i2cHz(i2cHz) {}
+    : m_i2cAddr(i2cAddr), m_i2cHz(i2cHz), m_bus(bus) {}
 
 bool ST25R3916::setEcpFrame(const uint8_t* frame, size_t length) {
     if (length > m_ecpData.size() || (length && !frame)) return false;
@@ -160,11 +153,8 @@ ST25R3916::~ST25R3916() {
 
 bool ST25R3916::init() {
     if (m_connected) return true;
-    if (m_sda < 0 || m_scl < 0 || m_sda == m_scl || m_i2cAddr < 8 || m_i2cAddr > 0x77 || m_i2cHz != 400000)
+    if (!m_bus || m_i2cAddr < 8 || m_i2cAddr > 0x77 || m_i2cHz != 400000)
         return false;
-    if (!m_wire.begin(m_sda, m_scl, m_i2cHz)) return false;
-    m_bus = static_cast<i2c_master_bus_handle_t>(i2cBusHandle(m_wire.getBusNum()));
-    if (!m_bus) return false;
     if (!m_dev) {
         i2c_device_config_t devcfg = {};
         devcfg.dev_addr_length = I2C_ADDR_BIT_LEN_7;
@@ -264,8 +254,7 @@ void ST25R3916::stop() {
         i2c_master_bus_rm_device(m_dev);
         m_dev = nullptr;
     }
-    // OpenKNX/TwoWire owns this bus, including other peripherals on it.
-    m_bus = nullptr;
+    // The caller owns the bus. Retain it for reinitialization after stop().
     m_connected = false;
     m_isodepActive = false;
     m_fieldUp = false;
@@ -1071,6 +1060,3 @@ bool ST25R3916::exchangeApdu(const std::vector<uint8_t>& send,
         }
     }
 }
-
-
-#endif

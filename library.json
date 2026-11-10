@@ -1,13 +1,14 @@
 {
   "name": "ST25R3916",
   "version": "0.1.1",
-  "description": "ESP32 Arduino I2C ST25R3916/3916B NFC-A / ISO-DEP driver with optional ECP transmission",
+  "description": "Native ESP-IDF I2C ST25R3916/3916B NFC-A / ISO-DEP driver with optional ECP transmission",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/u20p17/ST25R3916.git"
   },
   "frameworks": [
+    "espidf",
     "arduino"
   ],
   "platforms": [

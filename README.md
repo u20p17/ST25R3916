@@ -1,15 +1,15 @@
 # ST25R3916
 
-ESP32 Arduino hardware-I2C driver for the Elechouse ST25R3916 and ST25R3916B (including Mini) in I2C mode.
+Native ESP-IDF hardware-I2C driver for the Elechouse ST25R3916 and ST25R3916B (including Mini) in I2C mode.
 Default address **0x50**, bus **400 kHz**, no external IRQ wire required.
-Requires Arduino ESP32 with ESP-IDF 5.4+ and its native I2C bus-handle API.
+Requires ESP-IDF 5.4+. Arduino applications supply the native handle through an application-side bridge.
 
 ## Features
 
 - NFC-A discovery and 4/7/10-byte UID selection.
 - RATS/ATS and ISO-DEP APDU exchange, chaining, CRC checking and bounded WTX/recovery.
 - Optional caller-supplied ECP frames. ECP is disabled by default.
-- Borrows the shared TwoWire bus, removes only its own device handle on stop.
+- Borrows an initialized `i2c_master_bus_handle_t`; removes only its own device handle on stop.
 - No dependency on OpenKNX, ETS, HomeSpan, HomeKey or a credential store.
 
 ST25R3916 (type 0x05) and production ST25R3916B (type 0x06, revision 1+)
@@ -31,13 +31,27 @@ original-chip modulation values are not copied to the B variant.
 
 ```cpp
 #include <ST25R3916.hpp>
-ST25R3916 reader(Wire, 21, 22);
+// The application creates and owns the ESP-IDF master bus.
+ST25R3916 reader(bus);
 // During setup:
 // reader.init(); reader.beginDiscovery();
 // During loop, call pollForTag(uid, atqa, sak, timeoutMs).
 // For a selected ISO-DEP card, call exchangeApdu(command, response, timeoutMs).
 // releaseTag() after use; stop() removes only this reader's I2C device handle.
 ```
+
+For ESP-IDF, add this repository as a component (for example under
+`components/st25r3916`). `CMakeLists.txt` registers the driver and
+`idf_component.yml` declares the minimum SDK version. Arduino/PlatformIO builds
+can still compile the native source; the library itself includes no Arduino APIs.
+
+The application must create the bus before constructing the reader and keep it
+alive until after reader destruction. `init()` and recovery never create,
+restart, remap or delete the bus. Stop all reader calls before teardown and
+serialize bus/device lifecycle changes with other users. Do not scan or access
+the reader address through a second driver, change the bus clock/pins, or call
+`Wire.end()` while the reader exists. In OpenKNX, the Arduino bus bridge lives
+in OFM-AccessControl beside the PN bridge.
 
 Use the module's documented input supply and ESP32-compatible logic levels.
 The Elechouse Mini V2 specifies 3.3–5 V input; other modules may require 5 V.

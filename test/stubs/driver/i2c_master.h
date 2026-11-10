@@ -1,5 +1,11 @@
 #pragma once
-#include <Wire.h>
+#include <esp_err.h>
+#include <cstdint>
+struct FakeBus {
+    bool busInitialized = true;
+    unsigned deviceAdds = 0, deviceRemoves = 0, liveDevices = 1;
+    esp_err_t deviceAddStatus = ESP_OK;
+};
 #include <cassert>
 #include <freertos/task.h>
 #include <array>
@@ -7,8 +13,8 @@
 #include <vector>
 #include <algorithm>
 #include <cstring>
-using i2c_master_bus_handle_t = TwoWire*;
-struct Device { TwoWire* bus; };
+using i2c_master_bus_handle_t = FakeBus*;
+struct Device { FakeBus* bus; };
 using i2c_master_dev_handle_t = Device*;
 inline constexpr int I2C_ADDR_BIT_LEN_7 = 0;
 struct i2c_device_config_t {
@@ -26,7 +32,7 @@ inline uint8_t chipIdentity = 0x28;
 inline uint8_t supplyAdc = 214;
 inline bool calibrationFails = false, measurementFails = false;
 inline std::vector<uint8_t> commands;
-inline esp_err_t i2c_master_bus_add_device(TwoWire* bus, const i2c_device_config_t* cfg, Device** out) {
+inline esp_err_t i2c_master_bus_add_device(FakeBus* bus, const i2c_device_config_t* cfg, Device** out) {
     assert(bus->busInitialized && cfg->device_address == 0x50 && cfg->scl_speed_hz == 400000);
     if (bus->deviceAddStatus != ESP_OK) return bus->deviceAddStatus;
     *out = new Device{bus}; ++bus->liveDevices; ++bus->deviceAdds;
@@ -34,7 +40,7 @@ inline esp_err_t i2c_master_bus_add_device(TwoWire* bus, const i2c_device_config
     return ESP_OK;
 }
 inline esp_err_t i2c_master_bus_rm_device(Device* dev) {
-    assert(dev && dev->bus->liveDevices == 1);
+    assert(dev && dev->bus->liveDevices > 1);
     --dev->bus->liveDevices; ++dev->bus->deviceRemoves; delete dev; return ESP_OK;
 }
 inline esp_err_t i2c_master_transmit(Device* dev, const uint8_t* data, size_t len, int timeout) {

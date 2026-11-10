@@ -1,6 +1,5 @@
 #include <array>
 #include <vector>
-#include <Wire.h>
 #define private public
 #include "ST25R3916.hpp"
 #undef private
@@ -13,10 +12,16 @@ static void isoDep(ST25R3916& reader) {
 int main(int argc, char** argv) {
     assert(ST25R3916::fastPolling()); // Production and diagnostic builds default fast.
     if(argc > 1) ST25R3916::setFastPolling(std::string(argv[1]) != "baseline");
-    TwoWire wire;std::array<uint8_t,18> ecp{};
-    ST25R3916 reader(wire,21,22);
+    FakeBus bus;std::array<uint8_t,18> ecp{};
+    ST25R3916 nullBus(nullptr);
+    assert(!nullBus.init());
+    ST25R3916 invalidAddress(&bus, 0x78);
+    assert(!invalidAddress.init() && bus.deviceAdds == 0);
+    ST25R3916 invalidClock(&bus, 0x50, 100000);
+    assert(!invalidClock.init() && bus.deviceAdds == 0);
+    ST25R3916 reader(&bus);
     assert(reader.init() && reader.init());
-    assert(wire.sda==21 && wire.scl==22 && wire.deviceAdds==1);
+    assert(bus.deviceAdds==1 && bus.liveDevices==2);
     assert(reader.beginDiscovery());
     std::vector<uint8_t> uid, response;std::array<uint8_t,2> atqa;uint8_t sak=0;
     replies={{{4,0}},{{1,2,3,4,4}},{{0}}};
@@ -68,9 +73,9 @@ int main(int argc, char** argv) {
     assert(!reader.exchangeApdu({0xA4},response,1) && response.empty());
     assert(fakeMicros-start<200000 && !reader.m_exchanging);busTime=100;
     busFails=true;assert(!reader.healthCheck());busFails=false;
-    reader.stop();reader.stop();assert(wire.liveDevices==0 && wire.busInitialized);
-    assert(reader.init());reader.stop();assert(wire.deviceAdds==2 && wire.deviceRemoves==2);
-    chipIdentity=0;assert(!reader.init() && wire.liveDevices==0);chipIdentity=0x28;
+    reader.stop();reader.stop();assert(bus.liveDevices==1 && bus.busInitialized);
+    assert(reader.init());reader.stop();assert(bus.deviceAdds==2 && bus.deviceRemoves==2);
+    chipIdentity=0;assert(!reader.init() && bus.liveDevices==1);chipIdentity=0x28;
     // Both IC families must retain UID/ECP/ISO-DEP support and health checks.
     for (uint8_t identity : {0x28, 0x31}) {
         chipIdentity=identity;commands.clear();supplyAdc=identity==0x31?128:214;
@@ -91,12 +96,12 @@ int main(int argc, char** argv) {
         assert(!reader.healthCheck());reader.stop();
     }
     for(uint8_t invalid : {0x00,0x30,0x38,0xFF}) {
-        chipIdentity=invalid;assert(!reader.init() && wire.liveDevices==0);
+        chipIdentity=invalid;assert(!reader.init() && bus.liveDevices==1);
     }
     chipIdentity=0x31;calibrationFails=true;
-    assert(!reader.init() && wire.liveDevices==0);calibrationFails=false;
-    measurementFails=true;assert(!reader.init() && wire.liveDevices==0);measurementFails=false;
-    supplyAdc=0;assert(!reader.init() && wire.liveDevices==0);supplyAdc=128;
+    assert(!reader.init() && bus.liveDevices==1);calibrationFails=false;
+    measurementFails=true;assert(!reader.init() && bus.liveDevices==1);measurementFails=false;
+    supplyAdc=0;assert(!reader.init() && bus.liveDevices==1);supplyAdc=128;
     assert(reader.init() && reader.healthCheck());reader.stop();
 #ifdef ST25R3916_TIMING_TEST
     assert(reader.init());assert(reader.beginDiscovery());
@@ -118,6 +123,6 @@ int main(int argc, char** argv) {
     std::cout << "A/B timing model: ECP " << ecpUs[0] << " -> " << ecpUs[1]
         << " us; idle probe " << probeUs[0] << " -> " << probeUs[1] << " us (simulated bus)\n";
 #endif
-    wire.deviceAddStatus=ESP_ERR_NO_MEM;assert(!reader.init() && wire.liveDevices==0);
+    bus.deviceAddStatus=ESP_ERR_NO_MEM;assert(!reader.init() && bus.liveDevices==1);
     std::cout << "ST25R3916/3916B I2C identity, calibration, supply, UID, ECP, ISO-DEP chaining/CRC/WTX/bounds and shared-bus lifecycle passed\n";
 }
